@@ -2,7 +2,7 @@
 /**
  * Plugin Name: 标签浏览量统计
  * Plugin URI: https://www.3520.net
- * Description: 统计WordPress标签的浏览量，并提供管理功能。
+ * Description: 统计WordPress标签的浏览量，重置标签浏览量，删除浏览量为0的标签。
  * Version: 1.0.0
  * Author: Trae AI
  * Author URI: https://www.3520.net
@@ -18,6 +18,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // 后续插件代码将在这里添加
 
+// 获取被追踪的分类法，从选项中读取，并增加 filter 允许其他插件或主题修改
+function tagstj_get_tracked_taxonomies() {
+    $default_taxonomies = ['post_tag']; // 默认追踪 post_tag
+    $selected_taxonomies = get_option('tagstj_selected_taxonomies', $default_taxonomies);
+    // 确保返回的是数组
+    if ( !is_array($selected_taxonomies) ) {
+        $selected_taxonomies = $default_taxonomies;
+    }
+    return apply_filters( 'tagstj_tracked_taxonomies', $selected_taxonomies );
+}
+
 // 定义用于存储浏览量的 meta key
 define( 'TAGSTJ_VIEWS_META_KEY', '_tagstj_views_count' );
 
@@ -25,13 +36,17 @@ define( 'TAGSTJ_VIEWS_META_KEY', '_tagstj_views_count' );
  * 增加标签浏览量
  */
 function tagstj_increase_tag_view_count() {
-    if ( is_tag() ) {
-        $term = get_queried_object();
-        if ( $term instanceof WP_Term && $term->taxonomy === 'post_tag' ) {
-            $count = get_term_meta( $term->term_id, TAGSTJ_VIEWS_META_KEY, true );
-            $count = ! empty( $count ) ? absint( $count ) : 0;
-            $count++;
-            update_term_meta( $term->term_id, TAGSTJ_VIEWS_META_KEY, $count );
+    $tracked_taxonomies = tagstj_get_tracked_taxonomies();
+    foreach ( $tracked_taxonomies as $taxonomy ) {
+        if ( is_tax( $taxonomy ) || ( $taxonomy === 'post_tag' && is_tag() ) ) {
+            $term = get_queried_object();
+            if ( $term instanceof WP_Term && $term->taxonomy === $taxonomy ) {
+                $count = get_term_meta( $term->term_id, TAGSTJ_VIEWS_META_KEY, true );
+                $count = ! empty( $count ) ? absint( $count ) : 0;
+                $count++;
+                update_term_meta( $term->term_id, TAGSTJ_VIEWS_META_KEY, $count );
+                break; // 一旦找到匹配的分类法并更新计数，就跳出循环
+            }
         }
     }
 }
@@ -58,7 +73,14 @@ function tagstj_add_views_column_to_tags_table( $columns ) {
     $columns['tag_views'] = __( '浏览量', 'tagstj' );
     return $columns;
 }
-add_filter( 'manage_edit-post_tag_columns', 'tagstj_add_views_column_to_tags_table' );
+// 为所有被追踪的分类法添加浏览量列
+function tagstj_init_admin_columns() {
+    $tracked_taxonomies = tagstj_get_tracked_taxonomies();
+    foreach ( $tracked_taxonomies as $taxonomy ) {
+        add_filter( "manage_edit-{$taxonomy}_columns", 'tagstj_add_views_column_to_tags_table' );
+    }
+}
+add_action( 'admin_init', 'tagstj_init_admin_columns' );
 
 /**
  * 显示标签管理页面的浏览量数据
@@ -72,7 +94,14 @@ function tagstj_display_views_in_tags_table( $deprecated, $column_name, $term_id
         echo esc_html( tagstj_get_tag_view_count( $term_id ) );
     }
 }
-add_action( 'manage_post_tag_custom_column', 'tagstj_display_views_in_tags_table', 10, 3 );
+// 为所有被追踪的分类法显示浏览量数据
+function tagstj_init_admin_column_data() {
+    $tracked_taxonomies = tagstj_get_tracked_taxonomies();
+    foreach ( $tracked_taxonomies as $taxonomy ) {
+        add_action( "manage_{$taxonomy}_custom_column", 'tagstj_display_views_in_tags_table', 10, 3 );
+    }
+}
+add_action( 'admin_init', 'tagstj_init_admin_column_data' );
 
 /**
  * 添加插件管理菜单
@@ -80,7 +109,7 @@ add_action( 'manage_post_tag_custom_column', 'tagstj_display_views_in_tags_table
 function tagstj_add_admin_menu() {
     add_management_page(
         __( '标签浏览量统计管理', 'tagstj' ),
-        __( '标签浏览量', 'tagstj' ),
+        __( '标签浏览量设置', 'tagstj' ),
         'manage_options',
         'tagstj-settings',
         'tagstj_render_settings_page'
@@ -92,42 +121,84 @@ add_action( 'admin_menu', 'tagstj_add_admin_menu' );
  * 渲染插件设置页面
  */
 function tagstj_render_settings_page() {
-    if ( ! current_user_can( 'manage_options' ) ) {
-        return;
+    // 处理设置保存请求
+    if ( isset( $_POST['tagstj_save_settings_nonce'] ) && wp_verify_nonce( $_POST['tagstj_save_settings_nonce'], 'tagstj_save_settings_action' ) ) {
+        if ( isset( $_POST['tagstj_tracked_taxonomies'] ) && is_array( $_POST['tagstj_tracked_taxonomies'] ) ) {
+            $selected_taxonomies = array_map( 'sanitize_text_field', $_POST['tagstj_tracked_taxonomies'] );
+            update_option( 'tagstj_selected_taxonomies', $selected_taxonomies );
+            echo '<div class="updated"><p>设置已保存。</p></div>';
+        } else {
+            // 如果没有选择任何分类法，则保存一个空数组或默认值
+            update_option( 'tagstj_selected_taxonomies', ['post_tag'] ); // 或者 []
+            echo '<div class="updated"><p>设置已保存（未选择任何分类法，将默认追踪文章标签）。</p></div>';
+        }
     }
 
-    // 处理重置请求
-    if ( isset( $_POST['tagstj_reset_views_nonce'] ) && wp_verify_nonce( sanitize_key( $_POST['tagstj_reset_views_nonce'] ), 'tagstj_reset_views' ) ) {
-        tagstj_reset_all_tag_views();
-        echo '<div class="updated"><p>' . esc_html__( '所有标签的浏览量已重置。', 'tagstj' ) . '</p></div>';
+    // 处理重置所有标签浏览量的请求
+    if ( isset( $_POST['tagstj_reset_views_nonce'] ) && wp_verify_nonce( $_POST['tagstj_reset_views_nonce'], 'tagstj_reset_views_action' ) ) {
+        if ( isset( $_POST['tagstj_reset_all_views'] ) ) {
+            tagstj_reset_all_tag_views();
+            echo '<div class="updated"><p>所有已选分类法的项目浏览量已重置。</p></div>';
+        }
     }
 
-    // 处理删除无浏览量标签请求
-    if ( isset( $_POST['tagstj_delete_zero_view_tags_nonce'] ) && wp_verify_nonce( sanitize_key( $_POST['tagstj_delete_zero_view_tags_nonce'] ), 'tagstj_delete_zero_view_tags' ) ) {
-        $deleted_count = tagstj_delete_zero_view_tags();
-        echo '<div class="updated"><p>' . sprintf( esc_html__( '%d 个没有浏览量的标签已被删除。', 'tagstj' ), esc_html( $deleted_count ) ) . '</p></div>';
+    // 处理删除无浏览量标签的请求
+    if ( isset( $_POST['tagstj_delete_zero_views_nonce'] ) && wp_verify_nonce( $_POST['tagstj_delete_zero_views_nonce'], 'tagstj_delete_zero_views_action' ) ) {
+        if ( isset( $_POST['tagstj_delete_zero_view_tags'] ) ) {
+            $deleted_count = tagstj_delete_zero_view_tags();
+            echo '<div class="updated"><p>成功删除了 ' . intval( $deleted_count ) . ' 个已选分类法下没有浏览量的项目。</p></div>';
+        }
     }
+
+    $available_taxonomies = get_taxonomies( array( 'public' => true ), 'objects' );
+    $currently_tracked_taxonomies = tagstj_get_tracked_taxonomies(); // 获取当前实际追踪的（可能经过filter）
+    $selected_taxonomies_option = get_option('tagstj_selected_taxonomies', ['post_tag']); // 获取选项中保存的
+
     ?>
     <div class="wrap">
-        <h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
+        <h1>标签浏览量统计设置</h1>
+
         <form method="post" action="">
-            <?php wp_nonce_field( 'tagstj_reset_views', 'tagstj_reset_views_nonce' ); ?>
-            <p>
-                <input type="submit" name="tagstj_reset_views" class="button button-primary" value="<?php esc_attr_e( '重置所有标签浏览量', 'tagstj' ); ?>">
-            </p>
-            <p class="description">
-                <?php esc_html_e( '此操作将删除所有标签的浏览量统计数据。', 'tagstj' ); ?>
-            </p>
+            <?php wp_nonce_field( 'tagstj_save_settings_action', 'tagstj_save_settings_nonce' ); ?>
+            <h2>选择要追踪的分类法</h2>
+            <p>请选择您希望统计和显示浏览量的分类法（模块）：</p>
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row">可用分类法</th>
+                    <td>
+                        <?php foreach ( $available_taxonomies as $taxonomy_slug => $taxonomy_obj ) : ?>
+                            <?php 
+                                // 对于层级分类法（如category），通常不作为“标签”使用，但为了通用性，这里列出所有public的
+                                // 可以根据需要添加 $taxonomy_obj->hierarchical == false 的判断
+                            ?>
+                            <label style="margin-right: 20px;">
+                                <input type="checkbox" name="tagstj_tracked_taxonomies[]" value="<?php echo esc_attr( $taxonomy_slug ); ?>" <?php checked( in_array( $taxonomy_slug, $selected_taxonomies_option ) ); ?>>
+                                <?php echo esc_html( $taxonomy_obj->labels->name ); ?> (<code><?php echo esc_html( $taxonomy_slug ); ?></code>)
+                            </label><br>
+                        <?php endforeach; ?>
+                        <p class="description">选择后，插件将在这些分类法的管理页面显示“浏览量”列，并统计其下项目的浏览次数。</p>
+                    </td>
+                </tr>
+            </table>
+            <p><input type="submit" name="tagstj_save_settings" class="button button-primary" value="保存设置"></p>
         </form>
+
         <hr>
+        
         <form method="post" action="">
-            <?php wp_nonce_field( 'tagstj_delete_zero_view_tags', 'tagstj_delete_zero_view_tags_nonce' ); ?>
-            <p>
-                <input type="submit" name="tagstj_delete_zero_view_tags" class="button button-danger" value="<?php esc_attr_e( '删除没有浏览量的标签', 'tagstj' ); ?>">
-            </p>
-            <p class="description">
-                <?php esc_html_e( '此操作将删除所有浏览量为0的标签。请谨慎操作！', 'tagstj' ); ?>
-            </p>
+            <?php wp_nonce_field( 'tagstj_reset_views_action', 'tagstj_reset_views_nonce' ); ?>
+            <h2>重置浏览量</h2>
+            <p>此操作会将您在上方选择并保存的分类法下所有项目的浏览量重置为0。</p>
+            <p><input type="submit" name="tagstj_reset_all_views" class="button button-secondary" value="重置所选分类法的浏览量" onclick="return confirm('确定要重置所选分类法下所有项目的浏览量吗？此操作不可撤销。');"></p>
+        </form>
+
+        <hr>
+
+        <form method="post" action="">
+            <?php wp_nonce_field( 'tagstj_delete_zero_views_action', 'tagstj_delete_zero_views_nonce' ); ?>
+            <h2>删除无浏览量项目</h2>
+            <p>此操作会删除您在上方选择并保存的分类法下浏览量为0的项目。</p>
+            <p><input type="submit" name="tagstj_delete_zero_view_tags" class="button button-danger" value="删除所选分类法的无浏览量项目" onclick="return confirm('确定要删除所选分类法下所有浏览量为0的项目吗？此操作不可撤销。');"></p>
         </form>
     </div>
     <?php
@@ -137,14 +208,17 @@ function tagstj_render_settings_page() {
  * 重置所有标签的浏览量
  */
 function tagstj_reset_all_tag_views() {
-    $tags = get_terms( array(
-        'taxonomy'   => 'post_tag',
-        'hide_empty' => false,
-    ) );
+    $tracked_taxonomies = tagstj_get_tracked_taxonomies();
+    foreach ( $tracked_taxonomies as $taxonomy ) {
+        $terms = get_terms( array(
+            'taxonomy'   => $taxonomy,
+            'hide_empty' => false,
+        ) );
 
-    if ( ! empty( $tags ) && ! is_wp_error( $tags ) ) {
-        foreach ( $tags as $tag ) {
-            delete_term_meta( $tag->term_id, TAGSTJ_VIEWS_META_KEY );
+        if ( ! empty( $terms ) && ! is_wp_error( $terms ) ) {
+            foreach ( $terms as $term ) {
+                delete_term_meta( $term->term_id, TAGSTJ_VIEWS_META_KEY );
+            }
         }
     }
 }
@@ -155,18 +229,21 @@ function tagstj_reset_all_tag_views() {
  * @return int 删除的标签数量
  */
 function tagstj_delete_zero_view_tags() {
-    $tags = get_terms( array(
-        'taxonomy'   => 'post_tag',
-        'hide_empty' => false,
-    ) );
-
+    $tracked_taxonomies = tagstj_get_tracked_taxonomies();
     $deleted_count = 0;
-    if ( ! empty( $tags ) && ! is_wp_error( $tags ) ) {
-        foreach ( $tags as $tag ) {
-            $views = tagstj_get_tag_view_count( $tag->term_id );
-            if ( 0 === $views ) {
-                wp_delete_term( $tag->term_id, 'post_tag' );
-                $deleted_count++;
+    foreach ( $tracked_taxonomies as $taxonomy ) {
+        $terms = get_terms( array(
+            'taxonomy'   => $taxonomy,
+            'hide_empty' => false,
+        ) );
+
+        if ( ! empty( $terms ) && ! is_wp_error( $terms ) ) {
+            foreach ( $terms as $term ) {
+                $views = tagstj_get_tag_view_count( $term->term_id );
+                if ( 0 === $views ) {
+                    wp_delete_term( $term->term_id, $taxonomy );
+                    $deleted_count++;
+                }
             }
         }
     }
