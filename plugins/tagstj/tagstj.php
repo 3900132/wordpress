@@ -142,11 +142,12 @@ function tagstj_render_settings_page() {
         }
     }
 
-    // 处理删除无浏览量标签的请求
-    if ( isset( $_POST['tagstj_delete_zero_views_nonce'] ) && wp_verify_nonce( $_POST['tagstj_delete_zero_views_nonce'], 'tagstj_delete_zero_views_action' ) ) {
-        if ( isset( $_POST['tagstj_delete_zero_view_tags'] ) ) {
-            $deleted_count = tagstj_delete_zero_view_tags();
-            echo '<div class="updated"><p>成功删除了 ' . intval( $deleted_count ) . ' 个已选分类法下没有浏览量的项目。</p></div>';
+    // 处理删除指定浏览量标签的请求
+    if ( isset( $_POST['tagstj_delete_views_nonce'] ) && wp_verify_nonce( $_POST['tagstj_delete_views_nonce'], 'tagstj_delete_views_action' ) ) {
+        if ( isset( $_POST['tagstj_delete_view_tags'] ) ) {
+            $view_threshold = isset( $_POST['tagstj_view_threshold'] ) ? intval( $_POST['tagstj_view_threshold'] ) : 0;
+            $deleted_count = tagstj_delete_tags_by_view_count( $view_threshold );
+            echo '<div class="updated"><p>成功删除了 ' . intval( $deleted_count ) . ' 个已选分类法下浏览量为 ' . $view_threshold . ' 的项目。</p></div>';
         }
     }
 
@@ -195,10 +196,14 @@ function tagstj_render_settings_page() {
         <hr>
 
         <form method="post" action="">
-            <?php wp_nonce_field( 'tagstj_delete_zero_views_action', 'tagstj_delete_zero_views_nonce' ); ?>
-            <h2>删除无浏览量项目</h2>
-            <p>此操作会删除您在上方选择并保存的分类法下浏览量为0的项目。</p>
-            <p><input type="submit" name="tagstj_delete_zero_view_tags" class="button button-danger" value="删除所选分类法的无浏览量项目" onclick="return confirm('确定要删除所选分类法下所有浏览量为0的项目吗？此操作不可撤销。');"></p>
+            <?php wp_nonce_field( 'tagstj_delete_views_action', 'tagstj_delete_views_nonce' ); ?>
+            <h2>删除指定浏览量的项目</h2>
+            <p>此操作会删除您在上方选择并保存的分类法下，浏览量等于指定数字的项目。</p>
+            <p>
+                <label for="tagstj_view_threshold">要删除的浏览量值：</label>
+                <input type="number" id="tagstj_view_threshold" name="tagstj_view_threshold" value="0" min="0" step="1" style="width: 100px;">
+            </p>
+            <p><input type="submit" name="tagstj_delete_view_tags" class="button button-danger" value="删除所选分类法的指定浏览量项目" onclick="return confirm('确定要删除所选分类法下所有浏览量等于您输入数字的项目吗？此操作不可撤销。');"></p>
         </form>
     </div>
     <?php
@@ -224,11 +229,12 @@ function tagstj_reset_all_tag_views() {
 }
 
 /**
- * 删除没有浏览量的标签
+ * 删除指定浏览量的标签
  *
+ * @param int $view_threshold 要删除的浏览量阈值
  * @return int 删除的标签数量
  */
-function tagstj_delete_zero_view_tags() {
+function tagstj_delete_tags_by_view_count( $view_threshold = 0 ) {
     $tracked_taxonomies = tagstj_get_tracked_taxonomies();
     $deleted_count = 0;
     foreach ( $tracked_taxonomies as $taxonomy ) {
@@ -240,7 +246,7 @@ function tagstj_delete_zero_view_tags() {
         if ( ! empty( $terms ) && ! is_wp_error( $terms ) ) {
             foreach ( $terms as $term ) {
                 $views = tagstj_get_tag_view_count( $term->term_id );
-                if ( 0 === $views ) {
+                if ( $view_threshold === $views ) {
                     wp_delete_term( $term->term_id, $taxonomy );
                     $deleted_count++;
                 }
