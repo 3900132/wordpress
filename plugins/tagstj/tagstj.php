@@ -2,7 +2,7 @@
 /**
  * Plugin Name: 标签浏览量统计
  * Plugin URI: https://www.3520.net
- * Description: 统计WordPress标签的浏览量，重置标签浏览量，删除浏览量为0的标签。
+ * Description: 统计WordPress标签的浏览量，重置标签浏览量，删除指定浏览量数值的标签。
  * Version: 1.0.0
  * Author: Trae AI
  * Author URI: https://www.3520.net
